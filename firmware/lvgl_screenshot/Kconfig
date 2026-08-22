@@ -1,0 +1,10 @@
+menu "LVGL 屏幕截图"
+
+config LVGL_SCREENSHOT_ENABLE
+    bool "启用 LVGL 屏幕截图"
+    default n
+    help
+        启用后会在固件中编译截图捕获与 BMP 编码逻辑。
+
+endmenu
+

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ESP32 Lab Bridge</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #12161d;
+      --panel: #1b2028;
+      --panel-2: #232a35;
+      --border: #334052;
+      --text: #e6edf3;
+      --muted: #9aa7b3;
+      --accent: #7cc7ff;
+      --ok: #9cd67a;
+      --warn: #efc75e;
+      --err: #ef6b82;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      background: #151a22;
+    }
+    main {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      min-height: calc(100vh - 64px);
+    }
+    section {
+      padding: 16px;
+      border-right: 1px solid var(--border);
+    }
+    .panel {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; }
+    input, button {
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font: inherit;
+    }
+    input { width: 100%; }
+    button { cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+    .status { display: flex; gap: 8px; align-items: center; color: var(--muted); }
+    .dot { width: 10px; height: 10px; border-radius: 999px; background: #666; }
+    .dot.ok { background: var(--ok); }
+    .dot.warn { background: var(--warn); }
+    .dot.err { background: var(--err); }
+    .log {
+      height: calc(100vh - 110px);
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+      background: #0e1218;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .shot {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0e1218;
+    }
+    .muted { color: var(--muted); font-size: 12px; }
+    .stack { display: grid; gap: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div id="title" style="font-size:18px;font-weight:700">ESP32 Lab Bridge</div>
+    <div class="muted">Win10 本地串口代理</div>
+  </header>
+  <main>
+    <section>
+      <div class="panel stack">
+        <div class="status"><span id="dot" class="dot"></span><span id="state">idle</span></div>
+        <input id="port" placeholder="COM5">
+        <input id="baudrate" placeholder="921600" value="921600">
+        <div class="row">
+          <button id="startBtn">启动</button>
+          <button id="stopBtn">停止</button>
+        </div>
+        <div class="row">
+          <input id="firmware" type="file" accept=".bin">
+        </div>
+        <div class="row">
+          <button id="flashBtn">烧录</button>
+          <button id="shotBtn">截图</button>
+        </div>
+        <div class="row">
+          <button id="rebootBtn">重启</button>
+          <button id="pauseBtn">暂停日志</button>
+          <button id="resumeBtn">恢复日志</button>
+        </div>
+        <div class="muted" id="meta">-</div>
+      </div>
+      <div class="panel stack">
+        <div style="font-weight:600">最新截图</div>
+        <img id="preview" class="shot" alt="screenshot">
+      </div>
+    </section>
+    <section style="border-right:none">
+      <div class="panel" style="margin-bottom:0">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-weight:600">日志</div>
+          <button id="clearBtn">清空</button>
+        </div>
+        <div id="log" class="log"></div>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

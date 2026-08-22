@@ -1,0 +1,16 @@
+{
+  "projectName": "esp32-lab-bridge-demo",
+  "host": "0.0.0.0",
+  "port": 3000,
+  "defaultPort": "COM5",
+  "defaultBaudrate": 921600,
+  "defaultChip": "esp32s3",
+  "screenshotTimeoutMs": 30000,
+  "serialBridgeScript": "serial_bridge.ps1",
+  "publicDir": "public",
+  "logsDir": "logs",
+  "capturesDir": "captures",
+  "esptoolExe": "",
+  "esptoolExeName": "esptool.exe"
+}
+
