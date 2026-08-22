@@ -1,0 +1,4 @@
+version: "0.1.0"
+description: "EasyLogger 日志暂停、恢复和异步日志清空门控组件"
+dependencies:
+  idf: ">=5.0"

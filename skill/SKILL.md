@@ -23,6 +23,8 @@ description: 用于 ESP32 项目通过 Win10 串口桥完成烧录、日志、�
 - `{PORT}`: 串口号，例如 `COM5`
 - `{BASE_URL}`: 桥接服务地址，例如 `http://127.0.0.1:3000`
 
+这些占位符由 `skill/install_skill.sh` 在安装时自动替换。
+
 ## 工作流
 
 1. 先读取当前状态。
@@ -43,4 +45,3 @@ description: 用于 ESP32 项目通过 Win10 串口桥完成烧录、日志、�
 - [bridge/server.js](../bridge/server.js)
 - [bridge/serial_bridge.ps1](../bridge/serial_bridge.ps1)
 - [bridge/config.json](../bridge/config.json)
-

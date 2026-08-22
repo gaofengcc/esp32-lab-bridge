@@ -1,0 +1,4 @@
+version: "0.1.0"
+description: "可选 LVGL 屏幕截图和 BMP 编码组件"
+dependencies:
+  idf: ">=5.0"

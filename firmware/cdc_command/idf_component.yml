@@ -1,0 +1,4 @@
+version: "0.1.0"
+description: "通用 USB CDC 命令帧解析、命令注册和响应封装组件"
+dependencies:
+  idf: ">=5.0"
