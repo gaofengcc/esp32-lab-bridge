@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "ota_update.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        app_update
+        bootloader_support
+        cjson
+        esp_http_client
+        esp_partition
+        esp_system
+        freertos
+        heap
+        mbedtls
+)

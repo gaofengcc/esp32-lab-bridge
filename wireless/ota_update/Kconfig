@@ -1,0 +1,24 @@
+menu "ota_update"
+
+config OTA_UPDATE_MANIFEST_MAX_LEN
+    int "OTA manifest 最大长度"
+    default 4096
+    range 1024 16384
+    help
+      组件下载 manifest 时使用的最大缓冲区大小（字节）。
+
+config OTA_UPDATE_HTTP_TIMEOUT_MS
+    int "OTA HTTP 超时时间"
+    default 15000
+    range 1000 60000
+    help
+      manifest 和 bin 下载使用的 HTTP 超时时间（毫秒）。
+
+config OTA_UPDATE_HTTP_READ_BUF_SIZE
+    int "OTA HTTP 读缓冲大小"
+    default 4096
+    range 1024 8192
+    help
+      OTA bin 下载时的单次读取缓冲区大小（字节）。
+
+endmenu

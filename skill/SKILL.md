@@ -80,6 +80,12 @@ description: 用于 {PROJECT} 通过 Win10 Web 串口桥完成 ESP32 烧录、�
 - 硬件验证必须有命令输出、日志、截图或用户提供的证据支撑。
 - 截图路径不清楚时，检查项目中的 CDC 命令处理和 LVGL 截图实现，例如 `source/idf/*cdc*`、`source/idf/*screenshot*` 或同类模块。
 
+## 无线调试
+
+当设备已经通过 Wi-Fi 获取到局域网地址时，优先使用 `http://<device-ip>:8080`
+进行无线诊断。无线接口清单、token 规则和操作顺序见 `references/wireless.md`。
+串口桥只作为无线不可用、设备未联网或需要救援时的兜底路径。
+
 ## 关键文件
 
 - [bridge/server.js](../bridge/server.js)
@@ -93,3 +99,4 @@ description: 用于 {PROJECT} 通过 Win10 Web 串口桥完成 ESP32 烧录、�
 - [api-map.md](references/api-map.md)
 - [troubleshooting.md](references/troubleshooting.md)
 - [artifacts.md](references/artifacts.md)
+- [wireless.md](references/wireless.md)

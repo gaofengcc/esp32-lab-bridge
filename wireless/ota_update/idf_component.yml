@@ -1,0 +1,4 @@
+version: "0.1.0"
+description: "可复用的 OTA manifest 下载、校验与回滚组件模板"
+dependencies:
+  idf: ">=5.0"
