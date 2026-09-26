@@ -16,7 +16,7 @@ const DEFAULT_CONFIG = {
   projectName: "ESP32 Lab Bridge",
   host: "0.0.0.0",
   port: 3000,
-  defaultPort: "COM5",
+  defaultPort: "auto",
   defaultBaudrate: 921600,
   defaultChip: "esp32s3",
   screenshotTimeoutMs: 30000,

@@ -76,7 +76,9 @@ export function listSerialPorts({
     };
 
     const timer = setTimeout(() => {
-      child.kill();
+      try {
+        child.kill();
+      } catch {}
       finish(reject, new Error(`serial port enumeration timeout after ${timeoutMs}ms`));
     }, timeoutMs);
 
