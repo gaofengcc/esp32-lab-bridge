@@ -9,6 +9,7 @@ import {
   parsePortList,
   resolveFirstSerialPort,
 } from "../ports.js";
+import { DeviceSession } from "../server.js";
 
 async function makeMockCommand(body) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "esp32-lab-ports-test-"));
@@ -16,6 +17,20 @@ async function makeMockCommand(body) {
   await writeFile(command, `#!/bin/sh\n${body}\n`, "utf8");
   await chmod(command, 0o755);
   return { dir, command };
+}
+
+function makeSession(listPorts, defaultPort = "auto") {
+  return new DeviceSession(
+    { emit() {} },
+    {
+      projectName: "test",
+      defaultPort,
+      defaultBaudrate: 921600,
+      serialBridgeScript: "serial_bridge.ps1",
+      logsDir: "logs",
+    },
+    { listPorts },
+  );
 }
 
 test("parsePortList normalizes, deduplicates and sorts COM names", () => {
@@ -37,7 +52,7 @@ test("parsePortList normalizes, deduplicates and sorts COM names", () => {
 
 test("listSerialPorts parses multiple ports, keeps UTF-8 descriptions and falls back when missing", async () => {
   const mock = await makeMockCommand(
-    "printf '%s\\n' '[{\"port\":\"COM10\",\"description\":\"USB-SERIAL COM10\"},{\"port\":\"COM6\",\"description\":\"USB-SERIAL CH340 (COM6)\"},{\"port\":\"COM2\",\"description\":\"\"}]'",
+    "printf '%s\\n' '[{\"port\":\"COM10\",\"description\":\"开发板串口 COM10\"},{\"port\":\"COM6\",\"description\":\"USB-SERIAL CH340 (COM6)\"},{\"port\":\"COM2\",\"description\":\"\"}]'",
   );
   try {
     const ports = await listSerialPorts({
@@ -50,7 +65,7 @@ test("listSerialPorts parses multiple ports, keeps UTF-8 descriptions and falls 
     assert.deepEqual(ports, [
       { port: "COM2", description: "COM2", inUse: false },
       { port: "COM6", description: "USB-SERIAL CH340 (COM6)", inUse: true },
-      { port: "COM10", description: "USB-SERIAL COM10", inUse: false },
+      { port: "COM10", description: "开发板串口 COM10", inUse: false },
     ]);
   } finally {
     await rm(mock.dir, { recursive: true, force: true });
@@ -68,6 +83,24 @@ test("resolveFirstSerialPort returns empty for an empty list and skips occupied 
     { port: "COM2", description: "COM2", inUse: true },
     { port: "COM6", description: "COM6", inUse: false },
   ]), "COM6");
+});
+
+test("DeviceSession.resolvePort selects the first available port and rejects empty or occupied results", async () => {
+  const selected = makeSession(async () => [
+    { port: "COM2", description: "COM2", inUse: true },
+    { port: "COM6", description: "USB-SERIAL CH340 (COM6)", inUse: false },
+    { port: "COM10", description: "COM10", inUse: false },
+  ]);
+  assert.equal(await selected.resolvePort(), "COM6");
+
+  const empty = makeSession(async () => []);
+  await assert.rejects(empty.resolvePort(), /未找到可用串口/);
+
+  const occupied = makeSession(async () => [
+    { port: "COM2", description: "COM2", inUse: true },
+    { port: "COM6", description: "COM6", inUse: true },
+  ]);
+  await assert.rejects(occupied.resolvePort(), /未找到可用串口/);
 });
 
 test("listSerialPorts rejects a non-zero mock command with stderr", async () => {
