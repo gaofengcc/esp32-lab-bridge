@@ -4,7 +4,12 @@ config LVGL_SCREENSHOT_ENABLE
     bool "启用 LVGL 屏幕截图"
     default n
     help
-        启用后会在固件中编译截图捕获与 BMP 编码逻辑。
+        启用后编译截图捕获与 BMP 编码逻辑。
+        目标项目必须提供 LVGL、lvgl_port，并在 LVGL 配置中启用
+        LV_USE_SNAPSHOT；否则请保持关闭。
+
+        截图接口会在 LVGL 任务中读取当前活动屏幕，返回标准 24 位
+        BGR bottom-up BMP。关闭时组件不编译 LVGL 源文件，并提供安全
+        空桩接口。
 
 endmenu
-

@@ -9,6 +9,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "lvgl.h"
 #include "lvgl_port.h"
@@ -248,4 +249,3 @@ void lvgl_screenshot_free(uint8_t *bmp_buf)
 }
 
 #endif /* CONFIG_LVGL_SCREENSHOT_ENABLE */
-
