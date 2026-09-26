@@ -19,6 +19,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "mbedtls/md.h"
+#include "nvs.h"
 
 #ifndef CONFIG_OTA_UPDATE_MANIFEST_MAX_LEN
 #define CONFIG_OTA_UPDATE_MANIFEST_MAX_LEN 4096
@@ -33,6 +34,9 @@
 #endif
 
 #define OTA_UPDATE_TARGET_SHA256_LEN 32
+#define OTA_UPDATE_MERGED_APP_OFFSET 0x10000U
+#define OTA_UPDATE_NVS_NAMESPACE     "ota_ctrl"
+#define OTA_UPDATE_NVS_ROLLBACK_KEY  "rollback_once"
 
 static const char *TAG = "ota_update";
 
@@ -65,6 +69,49 @@ static esp_err_t ensure_lock(void)
         }
     }
     return ESP_OK;
+}
+
+/* 通过 NVS 保存一次性回滚请求，避免把项目业务状态耦合进组件。 */
+static esp_err_t schedule_rollback_once(bool enable)
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(OTA_UPDATE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (enable) {
+        err = nvs_set_u8(handle, OTA_UPDATE_NVS_ROLLBACK_KEY, 1);
+    } else {
+        err = nvs_erase_key(handle, OTA_UPDATE_NVS_ROLLBACK_KEY);
+        if (err == ESP_ERR_NVS_NOT_FOUND) {
+            err = ESP_OK;
+        }
+    }
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
+static bool consume_rollback_once_flag(void)
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(OTA_UPDATE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        return false;
+    }
+
+    uint8_t flag = 0;
+    err = nvs_get_u8(handle, OTA_UPDATE_NVS_ROLLBACK_KEY, &flag);
+    bool enabled = (err == ESP_OK && flag != 0);
+    if (enabled) {
+        (void)nvs_erase_key(handle, OTA_UPDATE_NVS_ROLLBACK_KEY);
+        (void)nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return enabled;
 }
 
 static void copy_string(char *dst, size_t dst_len, const char *src)
@@ -148,7 +195,7 @@ static esp_err_t refresh_status_snapshot(void)
     copy_partition_label(s_status.boot_partition, sizeof(s_status.boot_partition), boot);
     copy_partition_label(s_status.update_partition, sizeof(s_status.update_partition), next);
     s_status.pending_verify = is_pending_verify();
-#ifdef CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
+#if defined(CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE) && CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE
     s_status.rollback_enabled = true;
 #else
     s_status.rollback_enabled = false;
@@ -358,11 +405,48 @@ static esp_err_t http_read_all(const char *url, const char *bearer_token,
     return ESP_OK;
 }
 
+static bool manifest_is_merged_flash_image(const char *url)
+{
+    return url && strstr(url, "_merged.bin") != NULL;
+}
+
+static bool normalize_manifest_url(const char *input, char *out, size_t out_len)
+{
+    if (!input || !out || out_len == 0) {
+        return false;
+    }
+
+    const char *basename = strrchr(input, '/');
+    const char *filename = basename ? basename + 1 : input;
+    if (strcmp(filename, "manifest.json") == 0 ||
+        !manifest_is_merged_flash_image(filename)) {
+        copy_string(out, out_len, input);
+        return true;
+    }
+
+    size_t prefix_len = basename ? (size_t)(basename - input + 1) : 0;
+    const char *manifest_name = "manifest.json";
+    if (prefix_len + strlen(manifest_name) + 1 > out_len) {
+        return false;
+    }
+
+    if (prefix_len > 0) {
+        memcpy(out, input, prefix_len);
+    }
+    copy_string(out + prefix_len, out_len - prefix_len, manifest_name);
+    return true;
+}
+
 static esp_err_t minimal_boot_selftest(void)
 {
     const esp_partition_t *running = esp_ota_get_running_partition();
     const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
     if (!running || !next) {
+        return ESP_FAIL;
+    }
+
+    if (consume_rollback_once_flag()) {
+        ESP_LOGW(TAG, "一次性回滚标记已消费，故意让启动自检失败");
         return ESP_FAIL;
     }
 
@@ -482,12 +566,18 @@ esp_err_t ota_update_mark_app_valid_after_selftest(void)
 
 esp_err_t ota_update_mark_app_invalid_and_reboot(void)
 {
+    (void)ensure_lock();
     esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
     lock_status();
     s_status.state = OTA_UPDATE_STATE_FAILED;
     set_last_error_locked(err);
     unlock_status();
     return err;
+}
+
+esp_err_t ota_update_schedule_rollback_once(void)
+{
+    return schedule_rollback_once(true);
 }
 
 esp_err_t ota_update_service_init(void)
@@ -552,50 +642,38 @@ static void finish_operation_failure(esp_err_t err)
     unlock_status();
 }
 
-static esp_err_t run_manifest_ota(const char *manifest_url, const char *bearer_token)
+static esp_err_t run_manifest_json_ota(const char *manifest_json,
+                                       const char *manifest_url,
+                                       const char *bearer_token)
 {
-    if (!manifest_url || manifest_url[0] == '\0') {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    esp_err_t err = start_operation(manifest_url);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    char *manifest = (char *)heap_caps_malloc(CONFIG_OTA_UPDATE_MANIFEST_MAX_LEN, MALLOC_CAP_8BIT);
-    if (!manifest) {
-        finish_operation_failure(ESP_ERR_NO_MEM);
-        return ESP_ERR_NO_MEM;
-    }
-
-    size_t manifest_len = 0;
-    err = http_read_all(manifest_url, bearer_token,
-                        manifest, CONFIG_OTA_UPDATE_MANIFEST_MAX_LEN, &manifest_len);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "manifest 下载失败: %s", esp_err_to_name(err));
-        heap_caps_free(manifest);
-        finish_operation_failure(err);
-        return err;
-    }
-    ESP_LOGI(TAG, "manifest 下载完成: %u bytes", (unsigned)manifest_len);
-
-    char bin_url[256] = {0};
+    char bin_url[OTA_UPDATE_MANIFEST_URL_MAX_LEN] = {0};
     uint8_t expected_sha[OTA_UPDATE_TARGET_SHA256_LEN] = {0};
     size_t expected_size = 0;
-    err = parse_manifest(manifest, bin_url, sizeof(bin_url), expected_sha, &expected_size);
-    heap_caps_free(manifest);
+    esp_err_t err = parse_manifest(manifest_json, bin_url, sizeof(bin_url),
+                                   expected_sha, &expected_size);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "manifest 解析失败: %s", esp_err_to_name(err));
         finish_operation_failure(err);
         return err;
+    }
+
+    /* merged 包前 0x10000 是 flash 映射前缀，不能写进 app 分区。 */
+    bool merged_flash_image = manifest_is_merged_flash_image(bin_url);
+    size_t ota_payload_offset = merged_flash_image ? OTA_UPDATE_MERGED_APP_OFFSET : 0;
+    size_t ota_image_size = expected_size;
+    if (merged_flash_image) {
+        if (expected_size <= OTA_UPDATE_MERGED_APP_OFFSET) {
+            finish_operation_failure(ESP_ERR_INVALID_SIZE);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        ota_image_size = expected_size - OTA_UPDATE_MERGED_APP_OFFSET;
+        ESP_LOGI(TAG, "检测到 merged bin，跳过前置 0x%05x 字节写入 OTA",
+                 (unsigned)OTA_UPDATE_MERGED_APP_OFFSET);
     }
 
     const esp_partition_t *update = esp_ota_get_next_update_partition(NULL);
-    if (!update || expected_size == 0 || expected_size > update->size) {
-        err = ESP_ERR_INVALID_SIZE;
-        finish_operation_failure(err);
-        return err;
+    if (!update || ota_image_size == 0 || ota_image_size > update->size) {
+        finish_operation_failure(ESP_ERR_INVALID_SIZE);
+        return ESP_ERR_INVALID_SIZE;
     }
 
     esp_http_client_config_t cfg = {
@@ -605,9 +683,8 @@ static esp_err_t run_manifest_ota(const char *manifest_url, const char *bearer_t
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
-        err = ESP_FAIL;
-        finish_operation_failure(err);
-        return err;
+        finish_operation_failure(ESP_FAIL);
+        return ESP_FAIL;
     }
 
     err = set_bearer_token(client, bearer_token);
@@ -628,28 +705,25 @@ static esp_err_t run_manifest_ota(const char *manifest_url, const char *bearer_t
     if (content_len < 0) {
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
-        err = ESP_ERR_HTTP_FETCH_HEADER;
-        finish_operation_failure(err);
-        return err;
+        finish_operation_failure(ESP_ERR_HTTP_FETCH_HEADER);
+        return ESP_ERR_HTTP_FETCH_HEADER;
     }
     if (content_len > 0 && (size_t)content_len != expected_size) {
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
-        err = ESP_ERR_INVALID_SIZE;
-        finish_operation_failure(err);
-        return err;
+        finish_operation_failure(ESP_ERR_INVALID_SIZE);
+        return ESP_ERR_INVALID_SIZE;
     }
     int image_status = esp_http_client_get_status_code(client);
     if (image_status < 200 || image_status >= 300) {
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
-        err = ESP_FAIL;
-        finish_operation_failure(err);
-        return err;
+        finish_operation_failure(ESP_FAIL);
+        return ESP_FAIL;
     }
 
     esp_ota_handle_t ota = 0;
-    err = esp_ota_begin(update, expected_size, &ota);
+    err = esp_ota_begin(update, ota_image_size, &ota);
     if (err != ESP_OK) {
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
@@ -657,14 +731,14 @@ static esp_err_t run_manifest_ota(const char *manifest_url, const char *bearer_t
         return err;
     }
 
-    uint8_t *buf = (uint8_t *)heap_caps_malloc(CONFIG_OTA_UPDATE_HTTP_READ_BUF_SIZE, MALLOC_CAP_8BIT);
+    uint8_t *buf = (uint8_t *)heap_caps_malloc(CONFIG_OTA_UPDATE_HTTP_READ_BUF_SIZE,
+                                               MALLOC_CAP_8BIT);
     if (!buf) {
         (void)esp_ota_abort(ota);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
-        err = ESP_ERR_NO_MEM;
-        finish_operation_failure(err);
-        return err;
+        finish_operation_failure(ESP_ERR_NO_MEM);
+        return ESP_ERR_NO_MEM;
     }
 
     mbedtls_md_context_t sha_ctx;
@@ -676,35 +750,35 @@ static esp_err_t run_manifest_ota(const char *manifest_url, const char *bearer_t
         (void)esp_ota_abort(ota);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
-        err = ESP_FAIL;
-        finish_operation_failure(err);
-        return err;
+        finish_operation_failure(ESP_FAIL);
+        return ESP_FAIL;
     }
+
     int md_ret = mbedtls_md_setup(&sha_ctx, sha_info, 0);
     if (md_ret == 0) {
         md_ret = mbedtls_md_starts(&sha_ctx);
     }
     if (md_ret != 0) {
-        heap_caps_free(buf);
         mbedtls_md_free(&sha_ctx);
+        heap_caps_free(buf);
         (void)esp_ota_abort(ota);
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
-        err = ESP_FAIL;
-        finish_operation_failure(err);
-        return err;
+        finish_operation_failure(ESP_FAIL);
+        return ESP_FAIL;
     }
 
-    size_t written = 0;
+    size_t downloaded = 0;
+    size_t payload_written = 0;
     uint8_t last_reported_progress = 0;
-
     lock_status();
     s_status.state = OTA_UPDATE_STATE_DOWNLOADING;
     s_status.expected_bytes = expected_size;
     unlock_status();
 
-    while (written < expected_size) {
-        int ret = esp_http_client_read(client, (char *)buf, CONFIG_OTA_UPDATE_HTTP_READ_BUF_SIZE);
+    while (downloaded < expected_size) {
+        int ret = esp_http_client_read(client, (char *)buf,
+                                       CONFIG_OTA_UPDATE_HTTP_READ_BUF_SIZE);
         if (ret < 0) {
             err = ESP_FAIL;
             break;
@@ -715,30 +789,42 @@ static esp_err_t run_manifest_ota(const char *manifest_url, const char *bearer_t
         }
 
         size_t chunk = (size_t)ret;
-        if (written + chunk > expected_size) {
+        if (downloaded + chunk > expected_size) {
             err = ESP_ERR_INVALID_SIZE;
             break;
         }
 
-        lock_status();
-        s_status.state = OTA_UPDATE_STATE_WRITING;
-        unlock_status();
-
-        err = esp_ota_write(ota, buf, chunk);
-        if (err != ESP_OK) {
-            break;
-        }
         md_ret = mbedtls_md_update(&sha_ctx, buf, chunk);
         if (md_ret != 0) {
             err = ESP_FAIL;
             break;
         }
 
-        written += chunk;
+        size_t chunk_start = downloaded;
+        size_t chunk_end = downloaded + chunk;
+        if (chunk_end > ota_payload_offset) {
+            size_t write_offset = chunk_start < ota_payload_offset
+                                  ? ota_payload_offset - chunk_start
+                                  : 0;
+            size_t write_len = chunk - write_offset;
+            if (write_len > 0) {
+                lock_status();
+                s_status.state = OTA_UPDATE_STATE_WRITING;
+                unlock_status();
+                err = esp_ota_write(ota, buf + write_offset, write_len);
+                if (err != ESP_OK) {
+                    break;
+                }
+                payload_written += write_len;
+            }
+        }
+
+        downloaded += chunk;
         lock_status();
-        s_status.downloaded_bytes = written;
-        s_status.progress = (uint8_t)((written * 100U) / expected_size);
-        if (s_status.progress >= (uint8_t)(last_reported_progress + 10U) || s_status.progress == 100U) {
+        s_status.downloaded_bytes = downloaded;
+        s_status.progress = (uint8_t)((downloaded * 100U) / expected_size);
+        if (s_status.progress >= (uint8_t)(last_reported_progress + 10U) ||
+            s_status.progress == 100U) {
             last_reported_progress = s_status.progress;
         }
         s_status.state = OTA_UPDATE_STATE_DOWNLOADING;
@@ -757,10 +843,14 @@ static esp_err_t run_manifest_ota(const char *manifest_url, const char *bearer_t
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
 
-    if (err == ESP_OK && written != expected_size) {
+    if (err == ESP_OK && downloaded != expected_size) {
         err = ESP_ERR_INVALID_SIZE;
     }
-    if (err == ESP_OK && memcmp(actual_sha, expected_sha, sizeof(actual_sha)) != 0) {
+    if (err == ESP_OK && payload_written != ota_image_size) {
+        err = ESP_ERR_INVALID_SIZE;
+    }
+    if (err == ESP_OK &&
+        memcmp(actual_sha, expected_sha, sizeof(actual_sha)) != 0) {
         err = ESP_ERR_INVALID_CRC;
     }
     if (err != ESP_OK) {
@@ -772,7 +862,6 @@ static esp_err_t run_manifest_ota(const char *manifest_url, const char *bearer_t
     lock_status();
     s_status.state = OTA_UPDATE_STATE_VERIFYING;
     unlock_status();
-
     err = esp_ota_end(ota);
     if (err != ESP_OK) {
         finish_operation_failure(err);
@@ -787,7 +876,7 @@ static esp_err_t run_manifest_ota(const char *manifest_url, const char *bearer_t
     (void)refresh_status_snapshot();
     lock_status();
     copy_string(s_status.manifest_url, sizeof(s_status.manifest_url), manifest_url);
-    s_status.downloaded_bytes = written;
+    s_status.downloaded_bytes = downloaded;
     s_status.expected_bytes = expected_size;
     s_status.progress = 100;
     s_status.state = OTA_UPDATE_STATE_READY_TO_REBOOT;
@@ -801,10 +890,64 @@ esp_err_t ota_update_start_from_manifest(const char *manifest_url)
     return ota_update_start_from_manifest_auth(manifest_url, NULL);
 }
 
+esp_err_t ota_update_start_from_manifest_json(const char *manifest_json)
+{
+    return ota_update_start_from_manifest_json_auth(manifest_json, NULL);
+}
+
+esp_err_t ota_update_start_from_manifest_json_auth(const char *manifest_json,
+                                                   const char *bearer_token)
+{
+    if (!manifest_json || manifest_json[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = start_operation(NULL);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = run_manifest_json_ota(manifest_json, NULL, bearer_token);
+    return err;
+}
+
 esp_err_t ota_update_start_from_manifest_auth(const char *manifest_url,
                                               const char *bearer_token)
 {
-    return run_manifest_ota(manifest_url, bearer_token);
+    if (!manifest_url || manifest_url[0] == '\0') {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    esp_err_t err = start_operation(manifest_url);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    char manifest_fetch_url[OTA_UPDATE_MANIFEST_URL_MAX_LEN] = {0};
+    const char *fetch_url = manifest_url;
+    if (normalize_manifest_url(manifest_url, manifest_fetch_url,
+                               sizeof(manifest_fetch_url)) &&
+        strcmp(manifest_fetch_url, manifest_url) != 0) {
+        fetch_url = manifest_fetch_url;
+    }
+
+    char *manifest = (char *)heap_caps_malloc(CONFIG_OTA_UPDATE_MANIFEST_MAX_LEN,
+                                              MALLOC_CAP_8BIT);
+    if (!manifest) {
+        finish_operation_failure(ESP_ERR_NO_MEM);
+        return ESP_ERR_NO_MEM;
+    }
+
+    size_t manifest_len = 0;
+    err = http_read_all(fetch_url, bearer_token, manifest,
+                        CONFIG_OTA_UPDATE_MANIFEST_MAX_LEN, &manifest_len);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "manifest 下载完成: %u bytes", (unsigned)manifest_len);
+        err = run_manifest_json_ota(manifest, manifest_url, bearer_token);
+    } else {
+        finish_operation_failure(err);
+    }
+    heap_caps_free(manifest);
+    return err;
 }
 
 esp_err_t ota_update_begin_upload(size_t total_size, const char *sha256)

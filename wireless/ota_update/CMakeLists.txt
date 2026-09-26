@@ -13,4 +13,5 @@ idf_component_register(
         freertos
         heap
         mbedtls
+        nvs_flash
 )
