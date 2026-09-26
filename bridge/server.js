@@ -302,10 +302,10 @@ class SerialBridge {
       });
       child.on("error", fail);
       child.on("exit", (code, signal) => {
-        if (settled) {
-          return;
-        }
         if (!ready) {
+          if (settled) {
+            return;
+          }
           const reason = this.startupError ||
             (signal
               ? `serial bridge terminated by ${signal} before READY`
