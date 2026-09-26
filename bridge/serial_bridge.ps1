@@ -37,6 +37,7 @@ try {
   $serial.RtsEnable = $false
   $serial.ReadTimeout = 100
   $serial.WriteTimeout = 1000
+  $serial.ReceivedBytesThreshold = 1
   $serial.Open()
 
   $subscription = Register-ObjectEvent -InputObject $serial -EventName DataReceived -Action {
@@ -61,7 +62,23 @@ try {
   Emit "READY"
   Emit "INFO" "$Port $BaudRate"
 
-  while (($line = [Console]::In.ReadLine()) -ne $null) {
+  # 主线程用「异步读 stdin + 定时让出」替代阻塞式 ReadLine。
+  # 阻塞在 ReadLine 时，PowerShell 的单线程 runspace 无法及时处理 DataReceived
+  # 事件队列，串口日志会攒批（几分钟后才一次性吐给 Node）。
+  $pending = [Console]::In.ReadLineAsync()
+  while ($true) {
+    if ($null -eq $pending) {
+      $pending = [Console]::In.ReadLineAsync()
+    }
+    if (-not $pending.IsCompleted) {
+      Start-Sleep -Milliseconds 5
+      continue
+    }
+    $line = $pending.Result
+    $pending = $null
+    if ($null -eq $line) {
+      break
+    }
     if ($line.Length -eq 0) {
       continue
     }
