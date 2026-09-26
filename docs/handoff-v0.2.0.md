@@ -25,7 +25,7 @@
 
 ### `firmware/lvgl_screenshot`
 
-- 配置统一为 `CONFIG_LVGL_SCREENSHOT_ENABLE`，不再使用 Nas 版 `LVGL_SCREENSHOT_DEBUG`。
+- 配置统一为 `CONFIG_LVGL_SCREENSHOT_ENABLE`，不再使用参考工程的旧调试开关名。
 - 保留模板版可选依赖：关闭配置时不编译截图源文件、不引入 LVGL 相关依赖，并在头文件提供安全空桩。
 - 保留并核对截图函数集合：RGB565 位扩展、BGR24 编码、BMP 头、LVGL 任务内快照、互斥串行化、内存失败清理和释放 API。
 - 未合入 Nas 的 `app_log` 与看门狗 heartbeat 调用，避免引入业务耦合；如未来需要，可通过通用可选回调重新设计。
