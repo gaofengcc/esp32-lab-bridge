@@ -13,11 +13,18 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8NoBom
 $OutputEncoding = $utf8NoBom
 
+# 每次输出后立即 flush：.NET 的 Console.Out 在重定向到管道时默认带缓冲，
+# 会把串口日志攒批后才吐给 Node（表现为日志不实时 / 关掉连接才一次性出现）。
+function Write-Out([string]$Text) {
+  [Console]::Out.WriteLine($Text)
+  [Console]::Out.Flush()
+}
+
 function Emit([string]$Kind, [string]$Payload = "") {
   if ([string]::IsNullOrWhiteSpace($Payload)) {
-    [Console]::Out.WriteLine($Kind)
+    Write-Out $Kind
   } else {
-    [Console]::Out.WriteLine("$Kind $Payload")
+    Write-Out "$Kind $Payload"
   }
 }
 
@@ -41,13 +48,13 @@ try {
         $read = $sender.Read($buffer, 0, $count)
         if ($read -gt 0) {
           $b64 = [Convert]::ToBase64String($buffer, 0, $read)
-          [Console]::Out.WriteLine("DATA $b64")
+          [Console]::Out.WriteLine("DATA $b64"); [Console]::Out.Flush()
         } else {
           break
         }
       }
     } catch {
-      [Console]::Out.WriteLine("ERROR $($_.Exception.Message)")
+      [Console]::Out.WriteLine("ERROR $($_.Exception.Message)"); [Console]::Out.Flush()
     }
   }
 
