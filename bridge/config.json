@@ -2,7 +2,7 @@
   "projectName": "esp32-lab-bridge-demo",
   "host": "0.0.0.0",
   "port": 3000,
-  "defaultPort": "COM5",
+  "defaultPort": "auto",
   "defaultBaudrate": 921600,
   "defaultChip": "esp32s3",
   "screenshotTimeoutMs": 30000,
@@ -13,4 +13,3 @@
   "esptoolExe": "",
   "esptoolExeName": "esptool.exe"
 }
-

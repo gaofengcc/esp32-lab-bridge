@@ -469,10 +469,11 @@ class SerialBridge {
   }
 }
 
-class DeviceSession {
-  constructor(hub, config) {
+export class DeviceSession {
+  constructor(hub, config, { listPorts = listSerialPorts } = {}) {
     this.hub = hub;
     this.config = config;
+    this.listPorts = listPorts;
     this.portPath = config.defaultPort === "auto" ? "" : config.defaultPort;
     this.baudrate = config.defaultBaudrate;
     this.state = "idle";
@@ -509,7 +510,7 @@ class DeviceSession {
     if (configuredPort && configuredPort.toLowerCase() !== "auto") {
       return configuredPort;
     }
-    const ports = await listSerialPorts({ occupiedPort: this.occupiedPort });
+    const ports = await this.listPorts({ occupiedPort: this.occupiedPort });
     const selected = resolveFirstSerialPort(ports.filter((item) => !item.inUse));
     if (!selected) {
       throw new Error("未找到可用串口");
@@ -1025,6 +1026,19 @@ async function main() {
         json(res, 200, session.snapshot);
         return;
       }
+      if (req.method === "GET" && url.pathname === "/api/ports") {
+        try {
+          const ports = await session.listPorts({ occupiedPort: session.occupiedPort });
+          json(res, 200, { ok: true, ports });
+        } catch (err) {
+          json(res, 503, {
+            ok: false,
+            error: err instanceof Error ? err.message : String(err),
+            code: "SERIAL_PORT_ENUMERATION_FAILED",
+          });
+        }
+        return;
+      }
       if (req.method === "GET" && url.pathname === "/api/tools") {
         json(res, 200, {
           ok: true,
@@ -1106,7 +1120,9 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.stack || err.message : String(err));
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  main().catch((err) => {
+    console.error(err instanceof Error ? err.stack || err.message : String(err));
+    process.exit(1);
+  });
+}
