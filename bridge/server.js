@@ -520,7 +520,7 @@ export class DeviceSession {
 
   async start({ port, baudrate = this.config.defaultBaudrate }) {
     const resolvedPort = await this.resolvePort(port);
-    if (this.bridge.isOpen && this.portPath === port && this.baudrate === baudrate) {
+    if (this.bridge.isOpen && this.portPath === resolvedPort && this.baudrate === baudrate) {
       return this.snapshot;
     }
     if (this.bridge.isOpen) {
