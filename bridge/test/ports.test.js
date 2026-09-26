@@ -158,7 +158,7 @@ test("listSerialPorts rejects when the command is unavailable", async () => {
 
 test("listSerialPorts rejects when the mock command exceeds the timeout", async () => {
   const mock = await makeMockCommand(
-    "sleep 1\nprintf '%s\\n' '[]'",
+    "exec sleep 60",
   );
   try {
     const startedAt = Date.now();
