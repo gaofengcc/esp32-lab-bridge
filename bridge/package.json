@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "description": "Win10 serial bridge for ESP32 lab automation",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   }
 }
-
