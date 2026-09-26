@@ -172,7 +172,7 @@ static bool diag_token_is_weak(const char *token, size_t len, size_t min_len)
 
 static esp_err_t diag_check_bearer_auth(httpd_req_t *req)
 {
-#ifdef CONFIG_DIAG_SERVICE_TEST_AUTH_BYPASS
+#if defined(CONFIG_DIAG_SERVICE_TEST_AUTH_BYPASS) && CONFIG_DIAG_SERVICE_TEST_AUTH_BYPASS
     /* 仅供本地实验室临时调试，生产构建不得开启。 */
     (void)req;
     return ESP_OK;
