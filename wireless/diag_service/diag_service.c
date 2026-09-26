@@ -31,10 +31,19 @@ typedef struct diag_service_s {
     diag_service_http_cb_t on_ota_check;
     diag_service_http_cb_t on_ota_start;
     diag_service_http_cb_t on_reboot;
+    diag_service_status_cb_t on_selftest;
 } diag_service_t;
 
 static const char *TAG = "diag_service";
 static diag_service_t *s_service = NULL;
+
+#ifndef CONFIG_DIAG_SERVICE_HTTPD_STACK_SIZE
+#define CONFIG_DIAG_SERVICE_HTTPD_STACK_SIZE 12288
+#endif
+
+#ifndef CONFIG_DIAG_SERVICE_HTTPD_MAX_URI_HANDLERS
+#define CONFIG_DIAG_SERVICE_HTTPD_MAX_URI_HANDLERS 12
+#endif
 
 static const char *diag_status_line(int code)
 {
@@ -163,6 +172,11 @@ static bool diag_token_is_weak(const char *token, size_t len, size_t min_len)
 
 static esp_err_t diag_check_bearer_auth(httpd_req_t *req)
 {
+#ifdef CONFIG_DIAG_SERVICE_TEST_AUTH_BYPASS
+    /* 仅供本地实验室临时调试，生产构建不得开启。 */
+    (void)req;
+    return ESP_OK;
+#else
     if (!s_service || !s_service->bearer_token) {
         return ESP_ERR_INVALID_STATE;
     }
@@ -200,6 +214,7 @@ static esp_err_t diag_check_bearer_auth(httpd_req_t *req)
     }
 
     return ESP_OK;
+#endif
 }
 
 static esp_err_t diag_require_auth(httpd_req_t *req)
@@ -342,6 +357,45 @@ static esp_err_t diag_screenshot_handler(httpd_req_t *req)
     return err;
 }
 
+static esp_err_t diag_selftest_handler(httpd_req_t *req)
+{
+    esp_err_t err = diag_require_auth(req);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (!s_service->on_selftest) {
+        return diag_send_json_error(req, 501,
+                                    "not_implemented",
+                                    "自检路由尚未接入业务实现");
+    }
+
+    diag_json_writer_t writer = {0};
+    err = diag_json_writer_init(&writer, DIAG_JSON_MIN_CAPACITY);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = diag_json_writer_begin_object(&writer);
+    if (err == ESP_OK) {
+        err = diag_json_writer_kv_bool(&writer, "ok", true);
+    }
+    if (err == ESP_OK) {
+        err = diag_json_writer_kv_string(&writer, "service", s_service->service_name);
+    }
+    if (err == ESP_OK) {
+        err = s_service->on_selftest(&writer, s_service->user_ctx);
+    }
+    if (err == ESP_OK) {
+        err = diag_json_writer_end_object(&writer);
+    }
+    if (err == ESP_OK) {
+        err = diag_send_json_response(req, 200, diag_json_writer_cstr(&writer));
+    }
+    diag_json_writer_deinit(&writer);
+    return err;
+}
+
 static esp_err_t diag_ota_status_handler(httpd_req_t *req)
 {
     esp_err_t err = diag_require_auth(req);
@@ -427,6 +481,7 @@ static esp_err_t diag_register_routes(httpd_handle_t server)
         { .uri = "/api/status", .method = HTTP_GET, .handler = diag_status_handler },
         { .uri = "/api/logs", .method = HTTP_GET, .handler = diag_logs_handler },
         { .uri = "/api/screenshot.bmp", .method = HTTP_GET, .handler = diag_screenshot_handler },
+        { .uri = "/api/selftest", .method = HTTP_POST, .handler = diag_selftest_handler },
         { .uri = "/api/ota/status", .method = HTTP_GET, .handler = diag_ota_status_handler },
         { .uri = "/api/ota/check", .method = HTTP_POST, .handler = diag_ota_check_handler },
         { .uri = "/api/ota/start", .method = HTTP_POST, .handler = diag_ota_start_handler },
@@ -884,6 +939,7 @@ esp_err_t diag_service_start(const diag_service_config_t *config,
     svc->on_logs = config->on_logs;
     svc->on_screenshot = config->on_screenshot;
     svc->on_screenshot_free = config->on_screenshot_free;
+    svc->on_selftest = config->on_selftest;
     svc->on_ota_status = config->on_ota_status;
     svc->on_ota_check = config->on_ota_check;
     svc->on_ota_start = config->on_ota_start;
@@ -893,8 +949,9 @@ esp_err_t diag_service_start(const diag_service_config_t *config,
     http_cfg.server_port = svc->port;
     http_cfg.ctrl_port = (uint16_t)(svc->port + 1U);
     http_cfg.max_open_sockets = 4;
+    http_cfg.max_uri_handlers = CONFIG_DIAG_SERVICE_HTTPD_MAX_URI_HANDLERS;
     http_cfg.lru_purge_enable = true;
-    http_cfg.stack_size = 8192;
+    http_cfg.stack_size = CONFIG_DIAG_SERVICE_HTTPD_STACK_SIZE;
 
     esp_err_t err = httpd_start(&svc->server, &http_cfg);
     if (err != ESP_OK) {

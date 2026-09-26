@@ -70,6 +70,8 @@ typedef struct {
     diag_service_http_cb_t on_ota_check;
     diag_service_http_cb_t on_ota_start;
     diag_service_http_cb_t on_reboot;
+    /* 自检路由复用状态 writer，业务侧只追加自检字段。 */
+    diag_service_status_cb_t on_selftest;
 } diag_service_config_t;
 
 esp_err_t diag_json_writer_init(diag_json_writer_t *writer, size_t initial_cap);

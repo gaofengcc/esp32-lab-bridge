@@ -1,0 +1,27 @@
+menu "diag_service"
+
+config DIAG_SERVICE_TEST_AUTH_BYPASS
+    bool "允许诊断服务鉴权旁路（仅实验室）"
+    default n
+    help
+      开启后，受保护诊断路由不再校验 Authorization: Bearer 头。
+      仅用于本地实验室联调，生产构建必须保持关闭。
+
+config DIAG_SERVICE_HTTPD_STACK_SIZE
+    int "诊断 HTTP 服务任务栈大小"
+    default 12288
+    range 4096 32768
+    help
+      设置 ESP-IDF HTTP 服务任务的栈大小，单位为字节。
+      自检、日志和 OTA 回调可能需要高于默认值的栈空间。
+
+config DIAG_SERVICE_HTTPD_MAX_URI_HANDLERS
+    int "诊断 HTTP 服务 URI 路由槽位数"
+    default 12
+    range 9 32
+    help
+      设置 HTTP 服务可注册的 URI 路由数量。
+      当前内置路由包含健康检查、状态、自检、日志、截图、OTA 和重启，
+      如业务侧复用同一 HTTP 服务注册其他路由，请预留额外槽位。
+
+endmenu

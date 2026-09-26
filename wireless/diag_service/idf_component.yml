@@ -1,4 +1,4 @@
-version: "0.1.0"
-description: "通用无线诊断服务模板：LAN HTTP、Bearer 鉴权、状态/日志/截图/OTA/重启路由"
+version: "0.2.0"
+description: "可复用的局域网诊断 HTTP 服务，提供 Bearer 鉴权、状态、自检、日志、截图、OTA 和重启路由"
 dependencies:
   idf: ">=5.0"

@@ -5,7 +5,5 @@ idf_component_register(
         "include"
     REQUIRES
         esp_http_server
-        freertos
-        heap
         esp_timer
 )
