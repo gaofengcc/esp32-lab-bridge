@@ -219,6 +219,7 @@ class SerialBridge {
     this.closing = false;
     this.portPath = "";
     this.baudrate = 0;
+    this.startupError = "";
   }
 
   get isOpen() {
@@ -256,6 +257,7 @@ class SerialBridge {
       this.baudrate = baudrate;
       this.stdoutBuffer = "";
       this.closing = false;
+      this.startupError = "";
 
       const readyPromise = new Promise((readyResolve, readyReject) => {
         this.readyResolve = readyResolve;
@@ -263,13 +265,28 @@ class SerialBridge {
       });
       this.opening = readyPromise;
       let settled = false;
+      let ready = false;
+      let timer = null;
 
       const fail = (err) => {
         if (settled) {
           return;
         }
         settled = true;
-        this._cleanup();
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (this.readyReject) {
+          const rejectReady = this.readyReject;
+          this.readyResolve = null;
+          this.readyReject = null;
+          rejectReady(err);
+        }
+        this._terminate(child);
+        if (this.proc === child) {
+          this._cleanup();
+        }
         reject(err);
       };
 
@@ -277,30 +294,40 @@ class SerialBridge {
       child.stderr.on("data", (chunk) => {
         const text = stripAnsi(chunk.toString("utf8")).trim();
         if (text) {
+          if (!ready) {
+            this.startupError = text;
+          }
           this.hub.emit("log", { line: `[bridge] ${text}` });
         }
       });
       child.on("error", fail);
-      child.on("exit", (code) => {
-        const err = code === 0 || this.closing ? null : new Error(`serial bridge exited with code ${code}`);
-        this.proc = null;
-        this.opening = null;
-        if (this.readyReject && err) {
-          this.readyReject(err);
+      child.on("exit", (code, signal) => {
+        if (settled) {
+          return;
         }
-        if (err && !this.closing) {
+        if (!ready) {
+          const reason = this.startupError ||
+            (signal
+              ? `serial bridge terminated by ${signal} before READY`
+              : `serial bridge exited before READY (code ${code ?? "unknown"})`);
+          fail(new Error(reason));
+          return;
+        }
+        if (this.proc === child) {
+          this.proc = null;
+          this.opening = null;
+          this.stdoutBuffer = "";
+        }
+        if (code !== 0 && !this.closing) {
           this.hub.emit("status", {
             state: "idle",
             port: this.portPath,
             baudrate: this.baudrate,
           });
-          fail(err);
-          return;
         }
-        settled = true;
       });
 
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         fail(new Error("serial bridge start timeout"));
       }, 8000);
 
@@ -308,12 +335,16 @@ class SerialBridge {
         if (settled) {
           return;
         }
+        ready = true;
         clearTimeout(timer);
+        timer = null;
         settled = true;
+        this.opening = null;
+        this.readyResolve = null;
+        this.readyReject = null;
         this.hub.emit("log", { line: `[bridge] opened ${portPath} @ ${baudrate}` });
         resolve();
       }).catch((err) => {
-        clearTimeout(timer);
         fail(err);
       });
     });
@@ -324,19 +355,32 @@ class SerialBridge {
       return;
     }
     this.closing = true;
+    const child = this.proc;
     try {
-      if (this.proc.stdin.writable) {
-        this.proc.stdin.write("CLOSE\n");
+      if (child.stdin.writable) {
+        child.stdin.write("CLOSE\n");
       }
     } catch {}
     await new Promise((resolve) => {
-      const timer = setTimeout(resolve, 1500);
-      this.proc.once("exit", () => {
+      let done = false;
+      const finish = () => {
+        if (done) {
+          return;
+        }
+        done = true;
         clearTimeout(timer);
         resolve();
-      });
+      };
+      const timer = setTimeout(() => {
+        this._terminate(child);
+        finish();
+      }, 1500);
+      child.once("exit", finish);
+      child.once("error", finish);
     });
-    this._cleanup();
+    if (this.proc === child) {
+      this._cleanup();
+    }
   }
 
   write(buffer) {
@@ -362,6 +406,16 @@ class SerialBridge {
     this.portPath = "";
     this.baudrate = 0;
     this.closing = false;
+    this.startupError = "";
+  }
+
+  _terminate(child) {
+    if (!child || child.exitCode !== null || child.signalCode !== null || child.killed) {
+      return;
+    }
+    try {
+      child.kill();
+    } catch {}
   }
 
   _onStdout(chunk) {
@@ -385,6 +439,19 @@ class SerialBridge {
         this.readyResolve = null;
         this.readyReject = null;
       }
+      return;
+    }
+    if (line.startsWith("ERROR")) {
+      if (this.opening) {
+        this.startupError = line.slice(5).trim() || line;
+        if (this.readyReject) {
+          const rejectReady = this.readyReject;
+          this.readyResolve = null;
+          this.readyReject = null;
+          rejectReady(new Error(this.startupError));
+        }
+      }
+      this.hub.emit("log", { line: `[bridge] ${line}` });
       return;
     }
     if (line.startsWith("DATA ")) {
@@ -443,16 +510,18 @@ class DeviceSession {
     this.baudrate = baudrate;
     this.state = "opening";
     this.logPath = path.join(resolvePath(__dirname, this.config.logsDir), `serial_${Date.now()}.log`);
-    await fsp.mkdir(path.dirname(this.logPath), { recursive: true });
-    this.hub.emit("status", this.snapshot);
     try {
+      await fsp.mkdir(path.dirname(this.logPath), { recursive: true });
+      this.hub.emit("status", this.snapshot);
       await this.bridge.open(port, baudrate);
     } catch (err) {
+      await this.bridge.close().catch(() => {});
       this.state = "idle";
       this.portPath = this.config.defaultPort;
       this.logPath = "";
       this.hub.emit("status", this.snapshot);
-      throw err;
+      const reason = err instanceof Error ? err.message : String(err);
+      throw new Error(`failed to open port ${port}: ${reason}`);
     }
     this.state = "running";
     this.hub.emit("status", this.snapshot);
