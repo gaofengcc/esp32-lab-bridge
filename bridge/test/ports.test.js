@@ -35,9 +35,9 @@ test("parsePortList normalizes, deduplicates and sorts COM names", () => {
   assert.equal(resolveFirstSerialPort(ports), "COM2");
 });
 
-test("listSerialPorts marks the occupied port and keeps UTF-8 descriptions", async () => {
+test("listSerialPorts parses multiple ports, keeps UTF-8 descriptions and falls back when missing", async () => {
   const mock = await makeMockCommand(
-    "printf '%s\\n' '[{\"port\":\"COM10\",\"description\":\"USB-SERIAL COM10\"},{\"port\":\"COM6\",\"description\":\"USB-SERIAL CH340 (COM6)\"},{\"port\":\"COM2\",\"description\":\"开发板串口 COM2\"}]'",
+    "printf '%s\\n' '[{\"port\":\"COM10\",\"description\":\"USB-SERIAL COM10\"},{\"port\":\"COM6\",\"description\":\"USB-SERIAL CH340 (COM6)\"},{\"port\":\"COM2\",\"description\":\"\"}]'",
   );
   try {
     const ports = await listSerialPorts({
@@ -48,10 +48,76 @@ test("listSerialPorts marks the occupied port and keeps UTF-8 descriptions", asy
     });
 
     assert.deepEqual(ports, [
-      { port: "COM2", description: "开发板串口 COM2", inUse: false },
+      { port: "COM2", description: "COM2", inUse: false },
       { port: "COM6", description: "USB-SERIAL CH340 (COM6)", inUse: true },
       { port: "COM10", description: "USB-SERIAL COM10", inUse: false },
     ]);
+  } finally {
+    await rm(mock.dir, { recursive: true, force: true });
+  }
+});
+
+test("resolveFirstSerialPort returns empty for an empty list and skips occupied ports", () => {
+  assert.equal(resolveFirstSerialPort([]), "");
+  assert.equal(resolveFirstSerialPort(undefined), "");
+  assert.equal(resolveFirstSerialPort([
+    { port: "COM2", description: "COM2", inUse: true },
+    { port: "COM6", description: "COM6", inUse: true },
+  ]), "");
+  assert.equal(resolveFirstSerialPort([
+    { port: "COM2", description: "COM2", inUse: true },
+    { port: "COM6", description: "COM6", inUse: false },
+  ]), "COM6");
+});
+
+test("listSerialPorts rejects a non-zero mock command with stderr", async () => {
+  const mock = await makeMockCommand(
+    "printf '%s\\n' 'Get-CimInstance failed' >&2\nexit 7",
+  );
+  try {
+    await assert.rejects(
+      listSerialPorts({
+        command: mock.command,
+        scriptPath: "ignored-by-mock",
+        timeoutMs: 1000,
+      }),
+      /serial port enumeration exited with code 7: Get-CimInstance failed/,
+    );
+  } finally {
+    await rm(mock.dir, { recursive: true, force: true });
+  }
+});
+
+test("listSerialPorts rejects non-JSON output with a readable error", async () => {
+  const mock = await makeMockCommand(
+    "printf '%s\\n' 'not-json-output'",
+  );
+  try {
+    await assert.rejects(
+      listSerialPorts({
+        command: mock.command,
+        scriptPath: "ignored-by-mock",
+        timeoutMs: 1000,
+      }),
+      /invalid serial port enumeration output:/,
+    );
+  } finally {
+    await rm(mock.dir, { recursive: true, force: true });
+  }
+});
+
+test("listSerialPorts rejects when the command is unavailable", async () => {
+  const mock = await makeMockCommand("");
+  const missingCommand = path.join(mock.dir, "does-not-exist");
+  try {
+    await assert.rejects(
+      listSerialPorts({
+        command: missingCommand,
+        scriptPath: "ignored-by-mock",
+        timeoutMs: 1000,
+      }),
+      /serial port enumeration failed:/,
+    );
   } finally {
     await rm(mock.dir, { recursive: true, force: true });
   }
@@ -62,6 +128,7 @@ test("listSerialPorts rejects when the mock command exceeds the timeout", async 
     "sleep 1\nprintf '%s\\n' '[]'",
   );
   try {
+    const startedAt = Date.now();
     await assert.rejects(
       listSerialPorts({
         command: mock.command,
@@ -70,8 +137,8 @@ test("listSerialPorts rejects when the mock command exceeds the timeout", async 
       }),
       /serial port enumeration timeout after 20ms/,
     );
+    assert.ok(Date.now() - startedAt < 500, "timeout should settle promptly");
   } finally {
     await rm(mock.dir, { recursive: true, force: true });
   }
 });
-

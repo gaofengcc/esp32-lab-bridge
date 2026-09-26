@@ -106,7 +106,11 @@ export function listSerialPorts({
 }
 
 export function resolveFirstSerialPort(ports) {
-  return Array.isArray(ports) && ports.length > 0 ? ports[0].port : "";
+  if (!Array.isArray(ports)) {
+    return "";
+  }
+  const selected = ports.find((item) => item && !item.inUse && item.port);
+  return selected?.port || "";
 }
 
 export { DEFAULT_SCRIPT_PATH, normalizePortName, parsePortList };
