@@ -8,6 +8,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Node.js 按 UTF-8 解码桥接输出；显式设置编码，避免 Win10 默认代码页导致中文错误乱码。
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+
 function Emit([string]$Kind, [string]$Payload = "") {
   if ([string]::IsNullOrWhiteSpace($Payload)) {
     [Console]::Out.WriteLine($Kind)
@@ -105,4 +110,3 @@ finally {
     }
   } catch {}
 }
-
