@@ -53,7 +53,7 @@ npm start
 - `POST /api/log/resume`
 
 `GET /api/ports` 返回当前主机可用串口及友好设备描述。每项包含端口名
-（`port`）、描述（`description`，系统无法提供时为空字符串）和是否已被本桥占用
+（`port`）、描述（`description`，系统无法提供时降级为端口名）和是否已被本桥占用
 （`inUse`）。例如：
 
 ```json
