@@ -41,7 +41,7 @@ curl -H "Authorization: Bearer $DIAG_TOKEN" http://<device-ip>:8080/api/status
 - P0: 重启 + 日志
 - P1: OTA
 - P2: 截屏
-- P3: MQTT / WebSocket
+- P3: 业务项目自定义的扩展路由
 
 ## 与串口桥的关系
 
