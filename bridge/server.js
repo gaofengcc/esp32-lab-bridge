@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { listSerialPorts, resolveFirstSerialPort } from "./ports.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -313,7 +314,7 @@ class SerialBridge {
           fail(new Error(reason));
           return;
         }
-        if (this.proc === child) {
+        if (this.proc === child && !this.closing) {
           this.proc = null;
           this.opening = null;
           this.stdoutBuffer = "";
@@ -377,6 +378,9 @@ class SerialBridge {
       }, 1500);
       child.once("exit", finish);
       child.once("error", finish);
+      if (child.exitCode !== null || child.signalCode !== null) {
+        finish();
+      }
     });
     if (this.proc === child) {
       this._cleanup();
@@ -469,7 +473,7 @@ class DeviceSession {
   constructor(hub, config) {
     this.hub = hub;
     this.config = config;
-    this.portPath = config.defaultPort;
+    this.portPath = config.defaultPort === "auto" ? "" : config.defaultPort;
     this.baudrate = config.defaultBaudrate;
     this.state = "idle";
     this.rxBuffer = Buffer.alloc(0);
@@ -496,32 +500,50 @@ class DeviceSession {
     };
   }
 
-  async start({ port, baudrate = this.config.defaultBaudrate }) {
-    if (!port) {
-      throw new Error("port is required");
+  get occupiedPort() {
+    return this.bridge.isOpen ? this.portPath : "";
+  }
+
+  async resolvePort(requestedPort) {
+    const configuredPort = requestedPort || this.config.defaultPort;
+    if (configuredPort && configuredPort.toLowerCase() !== "auto") {
+      return configuredPort;
     }
+    const ports = await listSerialPorts({ occupiedPort: this.occupiedPort });
+    const selected = resolveFirstSerialPort(ports.filter((item) => !item.inUse));
+    if (!selected) {
+      throw new Error("未找到可用串口");
+    }
+    return selected;
+  }
+
+  async start({ port, baudrate = this.config.defaultBaudrate }) {
+    const resolvedPort = await this.resolvePort(port);
     if (this.bridge.isOpen && this.portPath === port && this.baudrate === baudrate) {
       return this.snapshot;
     }
     if (this.bridge.isOpen) {
       await this.stop();
     }
-    this.portPath = port;
+    this.portPath = resolvedPort;
     this.baudrate = baudrate;
     this.state = "opening";
     this.logPath = path.join(resolvePath(__dirname, this.config.logsDir), `serial_${Date.now()}.log`);
     try {
       await fsp.mkdir(path.dirname(this.logPath), { recursive: true });
       this.hub.emit("status", this.snapshot);
-      await this.bridge.open(port, baudrate);
+      await this.bridge.open(resolvedPort, baudrate);
     } catch (err) {
       await this.bridge.close().catch(() => {});
       this.state = "idle";
-      this.portPath = this.config.defaultPort;
+      this.portPath = this.config.defaultPort === "auto" ? "" : this.config.defaultPort;
       this.logPath = "";
       this.hub.emit("status", this.snapshot);
       const reason = err instanceof Error ? err.message : String(err);
-      throw new Error(`failed to open port ${port}: ${reason}`);
+      const error = new Error(`failed to open port ${resolvedPort}: ${reason}`);
+      error.port = resolvedPort;
+      error.reason = reason;
+      throw error;
     }
     this.state = "running";
     this.hub.emit("status", this.snapshot);
@@ -540,7 +562,7 @@ class DeviceSession {
     this.hub.emit("status", this.snapshot);
     await this.bridge.close().catch(() => {});
     this.state = "idle";
-    this.portPath = this.config.defaultPort;
+    this.portPath = this.config.defaultPort === "auto" ? "" : this.config.defaultPort;
     this.logPath = "";
     this.latestShotPath = "";
     this.hub.emit("status", this.snapshot);
