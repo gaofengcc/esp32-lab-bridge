@@ -49,7 +49,6 @@
 ```text
 bash tools/check_components.sh
 git diff --check
-rg -n -i 'nas_|nas-01|ext/|int/|mqtt|device_config|lcd35|LCD35' firmware wireless
 ```
 
 `check_components.sh` 五个组件的必备文件、`0.2.0` 版本、中文头注释和业务字符串扫描全部 PASS；本次未执行 ESP-IDF 编译、组件管理器真实拉取或真机验证。
